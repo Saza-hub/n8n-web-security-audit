@@ -1,0 +1,273 @@
+{
+  "name": "Audit web client autorisé - PDF Premium V3 (IP masquées)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a1",
+      "name": "Démarrer audit",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "target-url",
+              "name": "url",
+              "value": "https://example.com",
+              "type": "string"
+            },
+            {
+              "id": "approved-domain",
+              "name": "authorized_domain",
+              "value": "example.com",
+              "type": "string"
+            },
+            {
+              "id": "approval",
+              "name": "authorization_confirmed",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "approval-ref",
+              "name": "authorization_reference",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a2",
+      "name": "Paramètres de l’audit",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "HEAD",
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 15000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "a3",
+      "name": "Contrôler la réponse HTTP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        840,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const head = $('Contrôler la réponse HTTP').first().json;\nconst get = $('Inspecter page GET').first().json;\nconst optionsResponse = $input.first().json;\nconst response = get;\nconst cfg = $('Paramètres de l’audit').first().json;\nconst url = String(cfg.url || '');\nconst domain = String(cfg.authorized_domain || '');\nif(!/^https?:\\/\\//i.test(url)) throw Error('URL cible invalide : indiquer https://...');\nconst hdr=Object.fromEntries(Object.entries(response.headers||{}).map(([k,v])=>[k.toLowerCase(),Array.isArray(v)?v.join('; '):String(v)]));\nconst h=(k)=>hdr[k]||'';\nconst findings=[];\nconst add=(level,check,observation,action)=>findings.push({level,check,observation,action});\nconst status=Number(response.statusCode||0);\nconst headStatus=Number(head.statusCode||0);\nconst optionsStatus=Number(optionsResponse.statusCode||0);\nconst optionsHeaders=Object.fromEntries(Object.entries(optionsResponse.headers||{}).map(([k,v])=>[k.toLowerCase(),String(v)]));\nif(headStatus===405||headStatus===501) add('info','Contrôle HEAD','La méthode HEAD n’est pas acceptée.','Ce n’est pas une faille. Le contrôle GET reste disponible.');\nif(optionsStatus===405||optionsStatus===501) add('info','Contrôle OPTIONS','La méthode OPTIONS n’est pas acceptée.','Ce n’est pas une faille. Vérifier uniquement si l’application a besoin de cette méthode.');\nif(optionsHeaders['access-control-allow-origin']==='*' && optionsHeaders['access-control-allow-credentials']==='true') add('medium','Configuration CORS','En-têtes CORS larges et identifiants autorisés observés.','Faire confirmer par l’équipe web le comportement réel des navigateurs et les origines autorisées.');\nif(status>=300 && status<400) add('info','Redirection','Le site renvoie une redirection ; le workflow ne la suit pas pour rester dans le périmètre.','Auditer séparément l’adresse finale après validation de son appartenance au périmètre.');\nif(!/^https:\\/\\//i.test(url)) add('high','HTTPS','Le lien fourni utilise HTTP, sans chiffrement du transport.','Utiliser HTTPS et mettre en place une redirection HTTP vers HTTPS.');\nif(status===0) add('high','Accessibilité','Pas de code HTTP exploitable.','Vérifier accès, réseau et réponse serveur.');\nelse if(status===405||status===501) add('info','Méthode HEAD','Le serveur ne permet pas le contrôle par HEAD.','Compléter par un contrôle GET autorisé.');\nelse if(status>=400) add('medium','Statut HTTP','Le serveur renvoie le code '+status+'.','Vérifier cette réponse et les chemins de redirection.');\nif(!h('strict-transport-security')) add('medium','HSTS','En-tête HSTS absent sur cette réponse.','Étudier l’activation de HSTS lorsque HTTPS est opérationnel partout.');\nelse if(!/max-age=\\d+/i.test(h('strict-transport-security'))) add('low','HSTS','Directive max-age absente.','Ajouter un max-age HSTS valide.');\nif(!h('content-security-policy')) add('medium','Content-Security-Policy','Politique CSP non observée sur cette réponse.','Élaborer une CSP adaptée et la tester d’abord en mode Report-Only.');\nif(!/nosniff/i.test(h('x-content-type-options'))) add('medium','X-Content-Type-Options','La valeur nosniff n’est pas présente.','Ajouter X-Content-Type-Options: nosniff.');\nif(!h('x-frame-options') && !/frame-ancestors/i.test(h('content-security-policy'))) add('medium','Protection contre les cadres','Aucune protection X-Frame-Options ou frame-ancestors observée.','Ajouter frame-ancestors dans CSP ou une politique X-Frame-Options adaptée.');\nif(!h('referrer-policy')) add('low','Referrer-Policy','Politique de transmission de l’adresse précédente non observée.','Évaluer strict-origin-when-cross-origin.');\nif(!h('permissions-policy')) add('low','Permissions-Policy','Politique de contrôle des fonctionnalités navigateur non observée.','Restreindre les fonctionnalités non nécessaires.');\nif(h('server')) add('info','Bannière serveur','Le serveur communique une indication logicielle.','Éviter d’exposer les versions détaillées si possible.');\nif(h('x-powered-by')) add('low','X-Powered-By','Une technologie est révélée par un en-tête HTTP.','Masquer cet en-tête si non nécessaire.');\nif(h('set-cookie')) add('info','Cookies','Des cookies sont visibles, mais cette réponse ne permet pas une revue exhaustive.','Contrôler séparément tous les cookies de session, leurs attributs Secure, HttpOnly et SameSite.');\nconst weight={high:20,medium:10,low:3,info:0};\nconst score=Math.max(0,100-findings.reduce((s,f)=>s+(weight[f.level]||0),0));\nconst counts=Object.fromEntries(['high','medium','low','info'].map(k=>[k,findings.filter(f=>f.level===k).length]));\nreturn [{json:{target:url,domain,authorization_reference:cfg.authorization_reference,checks_executed:['HEAD','GET','OPTIONS'],checked_at:new Date().toISOString(),status_code:status,score_indicatif:score,counts,findings,headers_observed:Object.keys(hdr),limitations:'Audit autorisé à faible impact : 3 requêtes HTTP (HEAD, GET, OPTIONS) sans suivi de redirections. Pas de tests de charge, injection, exploitation, analyse TLS complète ni contrôle exhaustif des cookies. Le score est une aide à la priorisation et non une garantie de sécurité.',note:'Score pédagogique, non normalisé et non assimilable à une certification.'}}];"
+      },
+      "id": "a4",
+      "name": "Analyser et générer le rapport",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const audit = $input.first().json;\n// PDF vectoriel A4, 100% autonome : aucune dépendance externe n8n.\nconst W=595,H=842, margin=44, footer=42;\nconst palette={navy:'#101F35',blue:'#2563B4',cyan:'#DCEFFD',ink:'#26364B',muted:'#63748B',white:'#FFFFFF',light:'#F3F7FC',line:'#DCE5EF',red:'#CE4351',amber:'#C2832F',green:'#21826B',aqua:'#2CC6BA',pale:'#EAF2FC',palegreen:'#E5F6F2'};\nconst glossary={\n 'HTTPS':['Connexion sécurisée','HTTPS chiffre les échanges entre le navigateur et le site, notamment les mots de passe et les données saisies.'],\n 'HSTS':['Connexion HTTPS imposée','HSTS indique au navigateur de revenir uniquement en connexion chiffrée après une première visite sécurisée.'],\n 'Content-Security-Policy':['CSP : règles de chargement','La CSP indique au navigateur de quelles sources il peut charger scripts, images et autres ressources. Elle aide à limiter certaines injections.'],\n 'X-Content-Type-Options':['Type de fichier','Cette règle demande au navigateur de respecter le type de fichier annoncé par le site.'],\n 'Protection contre les cadres':['Protection contre les faux encadrements','Évite qu’une autre page intègre le site dans un cadre invisible pour tromper une personne et lui faire cliquer ailleurs.'],\n 'Referrer-Policy':['Protection des adresses visitées','Limite les informations sur la page précédente envoyées quand on suit un lien.'],\n 'Permissions-Policy':['Accès aux fonctions du navigateur','Contrôle quelles fonctions, comme la caméra ou le microphone, une page a le droit de demander.'],\n 'Bannière serveur':['Informations du serveur','Le site peut annoncer le logiciel du serveur ; une version précise pourrait aider à cibler des faiblesses connues.'],\n 'X-Powered-By':['Information sur la technologie','Cet en-tête peut révéler le langage ou l’outil utilisé pour créer le site.'],\n 'Cookies':['Petits fichiers du navigateur','Les cookies conservent notamment la connexion ou les préférences. Certains doivent être protégés contre l’accès non autorisé.'],\n 'Statut HTTP':['Code de réponse','Le numéro HTTP indique si le serveur a répondu normalement, redirigé ou signalé une erreur.'],\n 'Méthode HEAD':['Contrôle léger','HEAD demande seulement les informations de réponse, sans télécharger la page complète.'],\n 'Accessibilité':['Site joignable','Ce test vérifie si une réponse technique exploitable a été obtenue.']\n};\nconst levelLabel={high:'PRIORITÉ HAUTE',medium:'PRIORITÉ MOYENNE',low:'À AMÉLIORER',info:'INFORMATION'};\nconst levelColor={high:palette.red,medium:palette.amber,low:palette.blue,info:palette.muted};\nconst ascii=(v)=>String(v??'').normalize('NFKD').replace(/[\\u0300-\\u036f]/g,'').replace(/[\\u2018\\u2019]/g,\"'\").replace(/[\\u201C\\u201D]/g,'\"').replace(/[\\u2013\\u2014]/g,'-').replace(/[^\\x20-\\x7E\\u00A0-\\u00FF]/g,'?');\nconst esc=s=>ascii(s).replace(/\\\\/g,'\\\\\\\\').replace(/\\(/g,'\\\\(').replace(/\\)/g,'\\\\)');\nconst rgb=(hex)=>[1,3,5].map(i=>(parseInt(hex.slice(i,i+2),16)/255).toFixed(3)).join(' ');\nlet pages=[], commands=[],y=0;\nfunction rect(x,top,w,h,color){commands.push(`${rgb(color)} rg ${x} ${H-top-h} ${w} ${h} re f`);}\nfunction bar(x,top,w,h,pct,color){rect(x,top,w,h,palette.line);rect(x,top,Math.max(0,Math.min(1,pct))*w,h,color);}\nfunction badge(label,x,top,w,color=palette.blue){rect(x,top,w,24,color);txt(label,x+10,top+6,9,palette.white,'F2');}\nfunction line(x1,top1,x2,top2,color=palette.line){commands.push(`${rgb(color)} RG 0.7 w ${x1} ${H-top1} m ${x2} ${H-top2} l S`);}\nfunction txt(t,x,top,size=10,color=palette.ink,font='F1'){commands.push(`BT /${font} ${size} Tf ${rgb(color)} rg 1 0 0 1 ${x} ${H-top-size} Tm (${esc(t)}) Tj ET`);}\nfunction wrap(s,width=82){let words=ascii(s).split(/\\s+/), rows=[],cur='';for(const word of words){if(!word)continue;if((cur+' '+word).trim().length>width&&cur){rows.push(cur);cur='';}if(word.length>width){if(cur){rows.push(cur);cur='';}for(let i=0;i<word.length;i+=width)rows.push(word.slice(i,i+width));}else cur+=(cur?' ':'')+word;}if(cur)rows.push(cur);return rows;}\nfunction para(s,x,top,width=88,size=10,leading=15,color=palette.ink){let rows=wrap(s,width);for(let i=0;i<rows.length;i++)txt(rows[i],x,top+i*leading,size,color);return rows.length*leading;}\nfunction newPage(section){if(commands.length)pages.push(commands.join('\\n')+'\\n');commands=[];rect(0,0,W,11,palette.blue);rect(0,11,W,72,palette.navy);txt('AUDIT DE SECURITE WEB',margin,29,16,palette.white,'F2');txt(section,margin,57,9,'#B8D3F4');line(margin,795,W-margin,795);txt('Audit de configuration HTTP - controles non intrusifs',margin,808,8,palette.muted);y=104;}\nfunction need(h){if(y+h>783)newPage('Constats | Suite des explications');}\nfunction section(s){need(42);txt(s,margin,y,14,palette.navy,'F2');y+=30;}\n// Couverture réellement générée par n8n, identique pour toutes les cibles.\nconst target=String(audit.target||'Site non precise');\nconst cnt=audit.counts||{};\nconst score=Math.max(0,Math.min(100,Number(audit.score_indicatif??0)));\nconst scoreCol=score>=85?palette.green:(score>=60?palette.amber:palette.red);\nconst dateLabel=String(audit.checked_at||'').slice(0,16).replace('T',' ');\n// Page 1 : couverture\nrect(0,0,W,H,palette.navy);\nrect(0,0,W,14,palette.aqua);\nrect(0,580,W,262,'#173451');\nrect(43,84,70,5,palette.aqua);\ntxt('RAPPORT DE SECURITE',43,116,24,palette.white,'F2');\ntxt('DE VOTRE SITE WEB',43,151,24,palette.white,'F2');\npara('Diagnostic de configuration - synthese claire et recommandations pour votre organisation',43,217,56,12,19,'#C3D9EF');\nrect(43,327,509,120,'#22415D');\ntxt('SITE ANALYSE',61,343,9,'#8EDBD7','F2');\npara(target,61,365,48,15,24,palette.white);\ntxt('DATE DU CONTROLE',61,467,9,'#8EDBD7','F2');\ntxt(dateLabel+' UTC',61,484,12,palette.white);\n// grille décorative volontairement non interprétée comme un score\nfor(let i=0;i<9;i++){rect(43+i*57,627,36,7,i<6?palette.aqua:'#42607C');}\ntxt('AUDIT HTTP NON INTRUSIF',43,655,11,palette.white,'F2');\npara('Ce document decrit les reglages visibles du site et ne constitue pas un test d intrusion ni une certification.',43,691,61,11,17,'#C3D9EF');\nline(43,784,552,784,'#42607C');\ntxt('DOCUMENT CLIENT   /   USAGE INFORMATIF',43,800,8,'#C3D9EF');\npages.push(commands.join('\\n')+'\\n');commands=[];\n// Page 2 : dashboard\nnewPage('Vue d ensemble | Synthese dirigeant');\nsection('Votre site en un coup d oeil');\nrect(margin,y,507,155,palette.light);\ntxt('INDICE PEDAGOGIQUE',margin+18,y+16,10,palette.muted,'F2');\ntxt(String(score)+'/100',margin+18,y+42,39,scoreCol,'F2');\nbar(margin+18,y+114,219,11,score/100,scoreCol);\ntxt('Cet indice ne prouve ni securite ni vulnerabilite.',margin+257,y+27,9,palette.ink);\ntxt('Il resume seulement les controles effectues.',margin+257,y+47,9,palette.ink);\ntxt('Reponse HTTP : '+String(audit.status_code??'non disponible'),margin+257,y+83,11,palette.navy,'F2');\ny+=181;\nsection('Repartition des observations');\nconst tiles=[['A EXAMINER',cnt.high||0,palette.red],['A PLANIFIER',cnt.medium||0,palette.amber],['A AMELIORER',cnt.low||0,palette.blue],['A CONFIRMER',cnt.info||0,palette.muted]];\ntiles.forEach((t,i)=>{let x=margin+(i%2)*260, yy=y+Math.floor(i/2)*90;rect(x,yy,247,77,palette.light);rect(x,yy,5,77,t[2]);txt(String(t[1]),x+15,yy+8,25,t[2],'F2');txt(t[0],x+67,yy+29,10,palette.ink,'F2');});\ny+=198;\nsection('Ce que signifie ce resultat');\ny+=para('Nous avons examine des instructions de securite que le site envoie au navigateur. Elles servent par exemple a proteger les connexions, limiter certaines utilisations dangereuses des pages et reduire les informations partagees.',margin,y,89,10,16);y+=15;\nrect(margin,y,507,75,palette.pale);txt('A RETENIR',margin+16,y+11,10,palette.blue,'F2');para('Une regle absente ne signifie pas qu un pirate a exploite le site. Chaque constat doit etre confronte au contexte du site et valide par son responsable technique.',margin+16,y+31,81,10,15);y+=99;\nnewPage('Priorites | Feuille de route');\nsection('Par quoi commencer ?');\nconst all=Array.isArray(audit.findings)?audit.findings:[];\nconst ranked=[...all].sort((a,b)=>({high:0,medium:1,low:2,info:3}[a.level]??4)-({high:0,medium:1,low:2,info:3}[b.level]??4));\nconst top=ranked.slice(0,5);\nif(!top.length){y+=para('Aucun ecart releve dans ce controle ponctuel. Un audit approfondi peut toutefois etre necessaire.',margin,y,85);}\nfor(let i=0;i<top.length;i++){\nconst f=top[i], c=levelColor[f.level]||palette.blue;\nneed(90);rect(margin,y,507,77,palette.light);rect(margin,y,6,77,c);txt('0'+(i+1),margin+16,y+13,15,c,'F2');txt(ascii(f.check).slice(0,47),margin+63,y+10,11,palette.navy,'F2');\npara('Action : '+String(f.action||''),margin+63,y+33,66,9,14,palette.ink);y+=88;\n}\ny+=12;need(125);section('Comment utiliser ce document');\ny+=para('Transmettre les constats a la personne qui administre le site ou a votre prestataire web. Prioriser les recommandations, verifier leur compatibilite avec le fonctionnement du site, puis refaire un controle apres correction.',margin,y,87,10,16);\nnewPage('Constats | Explications et corrections');\nsection('Constats detailles et vulgarises');\nconst findings=Array.isArray(audit.findings)?audit.findings:[];\nif(!findings.length){para('Aucun ecart detecte par ces controles limites. Cela ne garantit pas que le site est exempt de vulnerabilites.',margin,y);}\nfindings.forEach((f,i)=>{\n let glossaryEntry=glossary[f.check]||['Explication du controle','Ce controle concerne une information de securite presente ou absente dans la reponse du site.'];\n let desc=wrap(glossaryEntry[1],89).length*15, obs=wrap(f.observation||'',89).length*15, act=wrap(f.action||'',89).length*15;\n let tall=137+desc+obs+act;\n need(Math.min(tall,580));\n rect(margin,y,W-margin*2,35,palette.pale);rect(margin,y,6,35,levelColor[f.level]||palette.blue);\n txt(String(i+1).padStart(2,'0')+'  '+ascii(f.check),margin+15,y+10,11,palette.navy,'F2');\n txt(levelLabel[f.level]||'INFO',W-margin-135,y+12,8,levelColor[f.level]||palette.blue,'F2');y+=49;\n txt('EXPLICATION SIMPLE',margin,y,9,palette.blue,'F2');y+=18;\n y+=para(glossaryEntry[1],margin,y,89,10,15);y+=11;\n txt('CE QUI A ETE OBSERVE',margin,y,9,palette.navy,'F2');y+=17;\n y+=para(f.observation,margin,y,89,10,15);y+=11;\n txt('QUE FAIRE POUR AMELIORER ?',margin,y,9,palette.green,'F2');y+=17;\n y+=para(f.action,margin,y,89,10,15);y+=22;\n line(margin,y,W-margin,y);y+=23;\n});\nneed(160);section('Limites et fiabilite du diagnostic');\ny+=para('Ce rapport est une observation technique ponctuelle, basee sur trois controles HTTP limites (HEAD, GET et OPTIONS). Des en-tetes absents peuvent aussi dependre de la page, du CDN, du serveur ou d un choix fonctionnel. Les cookies ne sont pas audites exhaustivement.',margin,y,89,10,16);y+=14;\ny+=para('Aucun test d intrusion, de charge, de force brute, de scan de ports, de recherche CVE, de SQL/XSS ou de validation TLS approfondie n est effectue. Pour un audit complet, demander une autorisation ecrite et definir un perimetre.',margin,y,89,10,16);\npages.push(commands.join('\\n')+'\\n');\n// PDF structure: single-byte WinAnsi-compatible characters, deterministic byte positions.\nconst objects=[null];const add=s=>{objects.push(s);return objects.length-1;};\nconst catalog=add(''),pagesId=add('');\nconst f1=add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');\nconst f2=add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');\nconst refs=[];\npages.forEach((cmd,ix)=>{const total=pages.length;cmd+=`BT /F1 8 Tf ${rgb(palette.muted)} rg 1 0 0 1 504 25 Tm (Page ${ix+1}/${total}) Tj ET\\n`;\nconst stream=add('<< /Length '+Buffer.byteLength(cmd,'latin1')+' >>\\nstream\\n'+cmd+'endstream');\nrefs.push(add(`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /Font << /F1 ${f1} 0 R /F2 ${f2} 0 R >> >> /Contents ${stream} 0 R >>`));});\nobjects[catalog]=`<< /Type /Catalog /Pages ${pagesId} 0 R >>`;\nobjects[pagesId]=`<< /Type /Pages /Kids [${refs.map(x=>x+' 0 R').join(' ')}] /Count ${refs.length} >>`;\nlet pdf='%PDF-1.4\\n%Audit-web\\n', offsets=[0];\nfor(let i=1;i<objects.length;i++){offsets[i]=Buffer.byteLength(pdf,'latin1');pdf+=i+' 0 obj\\n'+objects[i]+'\\nendobj\\n';}\nconst xref=Buffer.byteLength(pdf,'latin1');pdf+='xref\\n0 '+objects.length+'\\n0000000000 65535 f \\n';for(let i=1;i<objects.length;i++)pdf+=String(offsets[i]).padStart(10,'0')+' 00000 n \\n';\npdf+=`trailer\\n<< /Root ${catalog} 0 R /Size ${objects.length} >>\\nstartxref\\n${xref}\\n%%EOF\\n`;\nconst hostname=target.replace(/^https?:\\/\\//i,'').split(/[/?#]/)[0].replace(/[^a-zA-Z0-9.-]/g,'_').slice(0,90)||'site';\nconst fileName='Rapport-audit-'+hostname+'-'+new Date().toISOString().slice(0,10)+'.pdf';\nconst binary=await this.helpers.prepareBinaryData(Buffer.from(pdf,'latin1'),fileName,'application/pdf');\nreturn [{json:{...audit,pdf_filename:fileName,pdf_pages:pages.length},binary:{rapport_pdf:binary}}];"
+      },
+      "id": "a5",
+      "name": "Créer rapport PDF design premium",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1810,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// STOP before any network call unless the customer explicitly approved this hostname.\nconst cfg=$input.first().json;\nconst url=String(cfg.url||'').trim();\nconst match=/^https:\\/\\/([^\\/:?#]+)(?:[:\\/\\?#]|$)/i.exec(url);\nif(!match) throw Error('HTTPS requis. Adresse invalide ou hôte manquant.');\nconst host=match[1].toLowerCase();\nif(/^(?:\\d{1,3}\\.){3}\\d{1,3}$/.test(host)||host.includes(':')) throw Error('Utiliser un nom DNS validé, pas une IP.');\nif(host==='localhost'||host.endsWith('.local')||host.endsWith('.internal')) throw Error('Cible interne non prise en charge dans ce mode.');\nif(host!==String(cfg.authorized_domain||'').toLowerCase().trim()) throw Error('Le domaine ciblé ne correspond pas au domaine autorisé.');\nif(cfg.authorization_confirmed!==true || !String(cfg.authorization_reference||'').trim()) throw Error('Autorisation écrite : confirmer et indiquer sa référence avant de démarrer.');\nreturn [{json:{url,authorized_domain:host,authorization_reference:cfg.authorization_reference}}];"
+      },
+      "id": "approval-gate",
+      "name": "Vérifier autorisation et périmètre",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $(\"Vérifier autorisation et périmètre\").first().json.url }}",
+        "options": {
+          "timeout": 15000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "get-check",
+      "name": "Inspecter page GET",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1080,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "OPTIONS",
+        "url": "={{ $(\"Vérifier autorisation et périmètre\").first().json.url }}",
+        "options": {
+          "timeout": 15000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "options-check",
+      "name": "Inspecter méthode OPTIONS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Démarrer audit": {
+      "main": [
+        [
+          {
+            "node": "Paramètres de l’audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Paramètres de l’audit": {
+      "main": [
+        [
+          {
+            "node": "Vérifier autorisation et périmètre",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vérifier autorisation et périmètre": {
+      "main": [
+        [
+          {
+            "node": "Contrôler la réponse HTTP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contrôler la réponse HTTP": {
+      "main": [
+        [
+          {
+            "node": "Inspecter page GET",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inspecter page GET": {
+      "main": [
+        [
+          {
+            "node": "Inspecter méthode OPTIONS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inspecter méthode OPTIONS": {
+      "main": [
+        [
+          {
+            "node": "Analyser et générer le rapport",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyser et générer le rapport": {
+      "main": [
+        [
+          {
+            "node": "Créer rapport PDF design premium",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}
