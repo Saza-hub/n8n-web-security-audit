@@ -1,4 +1,4 @@
-# Audit sécurité web — n8n Premium V3
+# Audit sécurité web — n8n
 
 Workflow n8n pour un **audit de configuration web non intrusif**, sur des sites clients dont l'audit est couvert par une **autorisation écrite**.
 
